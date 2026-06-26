@@ -1,1 +1,1 @@
-# Peg-Solitaire-with-RL-
+# Peg-Solitaire-with-RL
