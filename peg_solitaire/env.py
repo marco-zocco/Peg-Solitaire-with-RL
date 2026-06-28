@@ -17,7 +17,7 @@ class PegSolitaireEnv(gym.Env):
         self.move_table = generate_move_table(self.mask) # set of all possible moves (w/o considering the state)
         self.render_mode = render_mode
         self._start_state = start_state  # None | array | callable(mask, rng) -> board
-        self.max_steps = max_steps  # truncation cap: safety net for no-op illegal moves
+        self.max_steps = max_steps  
         self._steps = 0             # steps taken in the current episode
 
         self.action_space = spaces.Discrete(len(self.move_table))
@@ -48,9 +48,11 @@ class PegSolitaireEnv(gym.Env):
         invalid = (~self.mask).astype(np.float32)
         return np.stack([peg, invalid], axis=0) 
 
-    def action_mask(self):
+    def action_mask(self, legal=None):
+        if legal is None:
+            legal = legal_actions(self.board, self.move_table)
         m = np.zeros(self.action_space.n, dtype=bool)
-        m[legal_actions(self.board, self.move_table)] = True
+        m[legal] = True
         return m # same indexes for the moves as in move_table
 
     def successors(self):
@@ -71,22 +73,24 @@ class PegSolitaireEnv(gym.Env):
 
     def step(self, action):
         self._steps += 1
-
-        # Illegal action -> no-op: board unchanged, no reward, not terminated.
-        # truncated still fires if we've hit the step cap (next block).
-        if action not in legal_actions(self.board, self.move_table):
+        # Illegal action -> board unchanged, no reward, not terminated
+        legal = legal_actions(self.board, self.move_table)
+        if action not in legal:
             truncated = self._steps >= self.max_steps
-            return self._obs(), 0.0, False, truncated, {"action_mask": self.action_mask()}
+            return self._obs(), 0.0, False, truncated, {"action_mask": self.action_mask(legal)}
 
         self.board = apply_move(self.board, self.move_table[action])
+        next_legal = legal_actions(self.board, self.move_table) 
 
         pegs = int(self.board.sum())
         won = pegs == 1
-        stuck = not won and not legal_actions(self.board, self.move_table)
+        stuck = not won and not next_legal
         terminated = won or stuck
         truncated = not terminated and self._steps >= self.max_steps  # safety net
+
         reward = 1.0 if won else 0.0  # sparse: the win is the only signal
-        return self._obs(), reward, terminated, truncated, {"action_mask": self.action_mask()}
+        
+        return self._obs(), reward, terminated, truncated, {"action_mask": self.action_mask(next_legal)}
 
     def render(self):
         glyph = {(True, True): "o", (True, False): ".", (False, False): " "}
