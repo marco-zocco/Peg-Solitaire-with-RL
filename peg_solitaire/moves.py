@@ -2,8 +2,9 @@
 Move geometry generated from the mask.
 
 A move is one peg jumping orthogonally over an adjacent peg into the empty hole
-two cells away. Represented as (start, mid, dest), each an (row, col) tuple.
+two cells away. Represented as (str, mid, dst), each an (row, col) tuple.
 """
+
 
 import numpy as np
 
@@ -14,9 +15,12 @@ def generate_move_table(mask):
     """
     Every geometrically-possible jump on this board SHAPE.
 
-    Independent of where pegs currently sit.
-    The list index is the action id, and that index is what the Gymnasium Discrete action space refers to.
+    The list index is the action id, and that index is what the Gymnasium 
+    Discrete action space refers to.
+
+    output: list of ((str_x, str_y), (mid_x, mid_y), (dst_x, dst_y))
     """
+
     moves = []
     rows, cols = mask.shape
     for r in range(rows):
@@ -36,6 +40,7 @@ def legal_actions(board, move_table):
     Indices of moves playable from this occupancy: src has a peg, mid has a peg,
     dst is empty.
     """
+    
     return [
         i for i, (s, m, d) in enumerate(move_table)
         if board[s] and board[m] and not board[d]
