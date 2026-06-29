@@ -26,7 +26,7 @@ class PegSolitaireEnv(gym.Env):
         )
         self.board = None
 
-    # ---- start-state distribution: EXTENSION POINT (curriculum lives here) -------
+    # ---- start-state distribution---------------------------------------------
     def _initial_board(self):
         """Default: canonical central-empty start (the position you report solving).
         """
@@ -42,7 +42,7 @@ class PegSolitaireEnv(gym.Env):
         board[cr, cc] = False
         return board
 
-    # ---- observation / legality -------------------------------------------------
+    # ---- observation -------------------------------------------------
     def _obs(self):
         return featurize(self.board, self.mask)
 
@@ -53,14 +53,14 @@ class PegSolitaireEnv(gym.Env):
         m[legal] = True
         return m # same indexes for the moves as in move_table
 
-    def successors(self):
+    '''def successors(self):
         """
         outputs: (action_id, next_board) for each legal move.
         """
         return [
             (i, apply_move(self.board, self.move_table[i]))
             for i in legal_actions(self.board, self.move_table)
-        ]
+        ]'''
 
     # ---- Gymnasium API ----------------------------------------------------------
     def reset(self, *, seed=None, options=None):

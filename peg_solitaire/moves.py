@@ -57,3 +57,4 @@ def apply_move(board, move):
     new_board[m] = False   # jumped peg is removed
     new_board[d] = True    # peg lands in destination
     return new_board
+

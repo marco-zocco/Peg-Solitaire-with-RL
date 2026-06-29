@@ -25,7 +25,8 @@ def featurize_batch(boards, mask):
 
 
 def _v(model, X):
-    """V(X) as a flat numpy array. Works for a Keras model or a numpy mock."""
+    """V(X) as a flat numpy array"""
+
     return np.asarray(model(X, training=False)).reshape(-1)
 
 
@@ -40,38 +41,47 @@ def is_terminal(board, move_table):
 
 # ---- acting: greedy one-step lookahead --------------------------------------
 def greedy_action(board, model, mask, move_table, legal):
-    """argmax over legal moves of V_online(successor). Known dynamics -> no Q head."""
+    """argmax over legal moves of V_online(successor)"""
+
     succ = [apply_move(board, move_table[a]) for a in legal]
     vals = _v(model, featurize_batch(succ, mask))
     return legal[int(np.argmax(vals))]
 
 
 def select_action(board, model, mask, move_table, legal, epsilon, rng):
+    """"implementing epsilon-greedy"""
+
     if rng.random() < epsilon:
         return legal[rng.integers(len(legal))]
     return greedy_action(board, model, mask, move_table, legal)
 
 
-# ---- fitted-VI target -------------------------------------------------------
+# ---- fitted-Value Iteration target -------------------------------------------------------
 def compute_targets(boards, terminals, target_model, mask, move_table, gamma):
-    """y for each sampled board. Terminal -> 0. Else max over successors of
-    [r + gamma * (0 if successor terminal else V_target(successor))].
+    """
+    input:
+        boards: boards batch,
+        terminals: (B,), terminal state per board,
+        target_model: frozen target net,
+        ...
 
-    All successors across the minibatch are batched into ONE forward pass through
-    the target net, then reduced per board (segment max)."""
+    output:
+        (B,) of the computed targets for each board.
+    """
+
     B = len(boards)
     y = np.zeros(B, dtype=np.float32)
 
     succ_feats, owner, reward, bootstrap = [], [], [], []
     for i, board in enumerate(boards):
         if terminals[i]:
-            continue  # value of being at an endpoint is 0
+            continue  # target for terminal states is 0
         for a in legal_actions(board, move_table):
-            nb = apply_move(board, move_table[a])
-            term = is_terminal(nb, move_table)
-            succ_feats.append(featurize(nb, mask))
+            new_b = apply_move(board, move_table[a])
+            term = is_terminal(new_b, move_table)
+            succ_feats.append(featurize(new_b, mask))
             owner.append(i)
-            reward.append(1.0 if is_win(nb) else 0.0)
+            reward.append(1.0 if is_win(new_b) else 0.0)
             bootstrap.append(0.0 if term else 1.0)  # don't bootstrap past terminals
 
     if succ_feats:
@@ -79,6 +89,8 @@ def compute_targets(boards, terminals, target_model, mask, move_table, gamma):
         v = _v(target_model, X)
         owner = np.asarray(owner)
         q = np.asarray(reward, np.float32) + gamma * np.asarray(bootstrap, np.float32) * v
+        # for each board i, gather the Q-values of all its successor states (those whose owner == i) 
+        # and write the maximum into y[i]
         for i in range(B):
             sel = owner == i
             if sel.any():
@@ -87,12 +99,12 @@ def compute_targets(boards, terminals, target_model, mask, move_table, gamma):
 
 
 # ---- one gradient step ------------------------------------------------------
-def td_update(model, optimizer, X, y):
-    X = tf.convert_to_tensor(X)
-    y = tf.convert_to_tensor(y)
+def td_update(model, optimizer, sampled_bords, targets):
+    sampled_bords = tf.convert_to_tensor(sampled_bords)
+    targets = tf.convert_to_tensor(targets)
     with tf.GradientTape() as tape:
-        pred = model(X, training=True)[:, 0]
-        loss = tf.reduce_mean(tf.square(pred - y))
+        pred = model(sampled_bords, training=True)[:, 0]
+        loss = tf.reduce_mean(tf.square(pred - targets))
     grads = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(grads, model.trainable_variables))
     return float(loss)
@@ -118,6 +130,7 @@ def collect_episode(model, mask, move_table, buffer, rng, depth, epsilon, max_st
 
 # ---- schedules --------------------------------------------------------------
 def linear_schedule(start, end, frac):
+    
     return start + (end - start) * min(max(frac, 0.0), 1.0)
 
 
@@ -178,16 +191,13 @@ def train(
     return model
 
 
-# ---- evaluation hook (your oracle test lives here) --------------------------
+# ---- evaluation hook ----------------------------------
 def feasibility_scores(boards, model, mask):
-    """V(board) for each board -> your feasibility score. Threshold > 0 to predict
-    'solvable', then compare against YOUR backtracking solver's labels on a held-out
-    set. The solver is consulted ONLY here, never during training."""
+    
     return _v(model, featurize_batch(boards, mask))
 
 
 if __name__ == "__main__":
-    # Tiny smoke run: a few hundred shallow episodes just to prove the loop trains.
-    # (Not a real run -- that needs the full schedule and many more episodes.)
+    # Tiny smoke run
     train(episodes=300, depth_start=2, depth_end=4, depth_anneal_frac=1.0,
           target_sync=10, log_every=50)
