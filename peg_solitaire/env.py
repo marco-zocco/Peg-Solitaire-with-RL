@@ -4,7 +4,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from .board import ENGLISH_MASK
+from .board import ENGLISH_MASK, featurize
 from .moves import generate_move_table, legal_actions, apply_move
 
   
@@ -22,7 +22,7 @@ class PegSolitaireEnv(gym.Env):
 
         self.action_space = spaces.Discrete(len(self.move_table))
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(2, *self.mask.shape), dtype=np.float32
+            low=0.0, high=1.0, shape=(*self.mask.shape, 2), dtype=np.float32
         )
         self.board = None
 
@@ -44,9 +44,7 @@ class PegSolitaireEnv(gym.Env):
 
     # ---- observation / legality -------------------------------------------------
     def _obs(self):
-        peg = self.board.astype(np.float32)
-        invalid = (~self.mask).astype(np.float32)
-        return np.stack([peg, invalid], axis=0) 
+        return featurize(self.board, self.mask)
 
     def action_mask(self, legal=None):
         if legal is None:

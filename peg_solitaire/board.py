@@ -29,3 +29,12 @@ EUROPEAN_MASK = _mask_from_rows([
     "0011100",
 ])
 
+
+def featurize(board, mask):
+    """
+    Board (HxW bool) -> (H, W, 2) float32, channels-last: [peg, invalid]
+    """
+
+    peg = board.astype(np.float32)
+    invalid = (~mask).astype(np.float32)
+    return np.stack([peg, invalid], axis=-1)

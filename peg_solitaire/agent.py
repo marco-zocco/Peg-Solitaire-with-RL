@@ -12,7 +12,7 @@ import tensorflow as tf
 from tensorflow import keras
 from keras.optimizers import Adam
 
-from .board import ENGLISH_MASK
+from .board import ENGLISH_MASK, featurize
 from .moves import generate_move_table, legal_actions, apply_move
 from .model import build_value_network
 from .replay import ReplayBuffer
@@ -20,13 +20,6 @@ from .curriculum import generate_solvable_board
 
 
 # ---- board <-> network input ------------------------------------------------
-def featurize(board, mask):
-    """Board (7x7 bool) -> (7, 7, 2) float32: [peg plane, invalid plane]."""
-    peg = board.astype(np.float32)
-    invalid = (~mask).astype(np.float32)
-    return np.stack([peg, invalid], axis=-1)  # channels-last for Keras
-
-
 def featurize_batch(boards, mask):
     return np.stack([featurize(b, mask) for b in boards]).astype(np.float32)
 
