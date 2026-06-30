@@ -12,6 +12,7 @@ import tensorflow as tf
 from tensorflow import keras
 from keras.optimizers import Adam
 
+from .env import PegSolitaireEnv
 from .board import ENGLISH_MASK, featurize
 from .moves import generate_move_table, legal_actions, apply_move, is_win, is_terminal
 from .model import build_value_network
@@ -103,20 +104,27 @@ def td_update(model, optimizer, sampled_bords, targets):
 
 
 # ---- collection -------------------------------------------------------------
-def collect_episode(model, mask, move_table, buffer, rng, depth, epsilon, max_steps):
-    """Reverse-generate a solvable start, play forward epsilon-greedy, store every
-    visited board (+ terminal flag). Returns whether this episode reached a win."""
-    board, _ = generate_solvable_board(mask, move_table, depth, rng)
+def collect_episode(env, model, buffer, rng, depth, epsilon):
+    """Curricolum generated start -> forward play till it can't/win -> return if was won"""
+
+    start, _ = generate_solvable_board(env.mask, env.move_table, depth, rng)
+    _, action_mask = env.reset(options={"start_board": start})
+
+    start_term = is_terminal(env.board, env.move_table)
+    buffer.add(env.board.copy(), start_term)
+    if start_term:
+        return is_win(env.board)
+
     won = False
-    for _ in range(max_steps):
-        term = is_terminal(board, move_table)
-        buffer.add(board, term)
-        if term:
-            won = is_win(board)
+    while True:
+        legal = np.flatnonzero(action_mask["action_mask"])
+        a = select_action(env.board, model, env.mask, env.move_table, legal, epsilon, rng)
+        _, reward, terminated, truncated, action_mask = env.step(a)
+        buffer.add(env.board.copy(), terminated)
+        if terminated or truncated:
+            won = (reward == 1.0)
             break
-        legal = legal_actions(board, move_table)
-        a = select_action(board, model, mask, move_table, legal, epsilon, rng)
-        board = apply_move(board, move_table[a])
+        
     return won
 
 
@@ -145,7 +153,10 @@ def train(
     rng = np.random.default_rng(seed)
     tf.random.set_seed(seed)
 
-    move_table = generate_move_table(mask)
+    env = PegSolitaireEnv(mask=mask, max_steps=max_steps)
+    env.reset(seed=seed)
+    move_table = env.move_table
+
     model = build_value_network(board_shape=mask.shape)
     target = build_value_network(board_shape=mask.shape)
     target.set_weights(model.get_weights())
@@ -158,7 +169,7 @@ def train(
         epsilon = linear_schedule(eps_start, eps_end, frac / eps_anneal_frac)
         depth = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
 
-        won = collect_episode(model, mask, move_table, buffer, rng, depth, epsilon, max_steps)
+        won = collect_episode(env, model, buffer, rng, depth, epsilon)
         wins += int(won)
 
         loss = None
