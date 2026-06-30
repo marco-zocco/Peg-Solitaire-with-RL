@@ -58,3 +58,15 @@ def apply_move(board, move):
     new_board[d] = True    # peg lands in destination
     return new_board
 
+
+def is_win(board):
+
+    return int(board.sum()) == 1
+
+
+def is_terminal(board, move_table):
+    
+    return is_win(board) or not legal_actions(board, move_table)
+
+
+

@@ -13,7 +13,7 @@ from tensorflow import keras
 from keras.optimizers import Adam
 
 from .board import ENGLISH_MASK, featurize
-from .moves import generate_move_table, legal_actions, apply_move
+from .moves import generate_move_table, legal_actions, apply_move, is_win, is_terminal
 from .model import build_value_network
 from .replay import ReplayBuffer
 from .curriculum import generate_solvable_board
@@ -29,14 +29,6 @@ def _v(model, X):
 
     return np.asarray(model(X, training=False)).reshape(-1)
 
-
-# ---- game predicates --------------------------------------------------------
-def is_win(board):
-    return int(board.sum()) == 1
-
-
-def is_terminal(board, move_table):
-    return is_win(board) or not legal_actions(board, move_table)
 
 
 # ---- acting: greedy one-step lookahead --------------------------------------

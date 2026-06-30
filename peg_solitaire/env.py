@@ -5,7 +5,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from .board import ENGLISH_MASK, featurize
-from .moves import generate_move_table, legal_actions, apply_move
+from .moves import generate_move_table, legal_actions, apply_move, is_win
 
   
 class PegSolitaireEnv(gym.Env):
@@ -65,8 +65,13 @@ class PegSolitaireEnv(gym.Env):
     # ---- Gymnasium API ----------------------------------------------------------
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.board = self._initial_board()
+        if options and options.get("start_board") is not None:
+            self.board = np.asarray(options["start_board"], dtype=bool)
+            assert self.board.shape == self.mask.shape, f"start_board {self.board.shape} != board mask {self.mask.shape}"
+        else:
+            self.board = self._initial_board()
         self._steps = 0
+
         return self._obs(), {"action_mask": self.action_mask()}
 
     def step(self, action):
@@ -80,8 +85,7 @@ class PegSolitaireEnv(gym.Env):
         self.board = apply_move(self.board, self.move_table[action])
         next_legal = legal_actions(self.board, self.move_table) 
 
-        pegs = int(self.board.sum())
-        won = pegs == 1
+        won = is_win(self.board)
         stuck = not won and not next_legal
         terminated = won or stuck
         truncated = not terminated and self._steps >= self.max_steps  # safety net
