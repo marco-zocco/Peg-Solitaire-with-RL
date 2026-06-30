@@ -200,7 +200,26 @@ def feasibility_scores(boards, model, mask):
     return _v(model, featurize_batch(boards, mask))
 
 
+def evaluate_solve(env, model):
+    """Greedy (epsilon=0) rollout from the canonical central-empty start"""
+
+    _, action_mask = env.reset() 
+    steps = 0
+    while not is_terminal(env.board, env.move_table):
+        legal = np.flatnonzero(action_mask["action_mask"])
+        a = greedy_action(env.board, model, env.mask, env.move_table, legal)   # deterministic
+        obs, reward, terminated, truncated, action_mask = env.step(a)
+        steps += 1
+        if truncated:
+            break
+    return is_win(env.board), steps, int(env.board.sum())
+
+
+# ---- used for small tests -------------------
 if __name__ == "__main__":
-    # Tiny smoke run
-    train(episodes=300, depth_start=2, depth_end=4, depth_anneal_frac=1.0,
-          target_sync=10, log_every=50)
+    """train(episodes=300, depth_start=2, depth_end=4, depth_anneal_frac=1.0,
+          target_sync=10, log_every=50)"""
+    
+    model = train(episodes=300)
+    env = PegSolitaireEnv()
+    print(evaluate_solve(env, model))
