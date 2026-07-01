@@ -144,7 +144,7 @@ def train(
     batch_size=64,
     updates_per_episode=4,
     target_sync=20,            # episodes between hard syncs
-    eps_start=1.0, eps_end=0.05, eps_anneal_frac=0.5,
+    eps_start=1.0, eps_end=0.05, eps_anneal_frac= 0.8,     # 0.5,
     depth_start=2, depth_end=31, depth_anneal_frac=0.8,
     max_steps=200,
     seed=0,
@@ -192,7 +192,7 @@ def train(
             wins = 0
 
     return model
-
+    
 
 # ---- evaluation hook ----------------------------------
 def feasibility_scores(boards, model, mask):
@@ -220,6 +220,7 @@ if __name__ == "__main__":
     """train(episodes=300, depth_start=2, depth_end=4, depth_anneal_frac=1.0,
           target_sync=10, log_every=50)"""
     
-    model = train(episodes=300)
+    model = train(episodes=5000)
+    model.save_weights("peg_seed0.weights.h5")   # <-- add this, right after train returns
     env = PegSolitaireEnv()
     print(evaluate_solve(env, model))
