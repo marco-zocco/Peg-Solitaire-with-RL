@@ -6,7 +6,7 @@ from peg_solitaire.agent import collect_episode, feasibility_scores
 from peg_solitaire.feasibility_solver import is_solvable
 
 env = PegSolitaireEnv(); mask, mt = env.mask, env.move_table
-model = build_value_network(board_shape=mask.shape); model.load_weights("peg_seed0.weights.h5")
+model = build_value_network(board_shape=mask.shape); model.load_weights("peg_seed0_best.weights.h5")
 
 # reachable boards from forward play; epsilon>0 injects blunders
 buf = ReplayBuffer(50_000, board_shape=mask.shape); rng = np.random.default_rng(0)
@@ -18,7 +18,7 @@ pegs = B.reshape(len(B), -1).sum(1) # flatten
 V = feasibility_scores(B, model, mask)
 memo = {}
 solv = np.array([is_solvable(b, mt, memo) for b in B])  
-np.savez("oracle_cache.npz", B=B, pegs=pegs, V=V, solv=solv)    # save the results
+np.savez("oracle_cache_2.npz", B=B, pegs=pegs, V=V, solv=solv)    # save the results
 
 for lo, hi in [(2,5),(6,10),(11,16),(17,24),(25,32)]:
     m = (pegs >= lo) & (pegs <= hi)
@@ -37,7 +37,7 @@ def auc(v_solvable, v_dead):
     return higher + 0.5 * tie
 
 
-d = np.load("oracle_cache.npz")
+d = np.load("oracle_cache_2.npz")
 B, pegs, V, solv = d["B"], d["pegs"], d["V"], d["solv"]
 for lo, hi in [(2, 5), (6, 10), (11, 16), (17, 24)]:
     band = (pegs >= lo) & (pegs <= hi)
