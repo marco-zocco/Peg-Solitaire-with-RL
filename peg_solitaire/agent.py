@@ -18,6 +18,7 @@ from .moves import generate_move_table, legal_actions, apply_move, is_win, is_te
 from .model import build_value_network
 from .replay import ReplayBuffer
 from .curriculum import generate_solvable_board
+from .feasibility_solver import is_solvable
 
 
 # ---- board <-> network input ------------------------------------------------
@@ -163,11 +164,31 @@ def train(
     optimizer = Adam(lr)
     buffer = ReplayBuffer(buffer_capacity, board_shape=mask.shape)
 
+    # --- solver-labeled probe set: live feasibility separation, guarantees both classes ---
+    probe_rng = np.random.default_rng(seed + 12345)   # separate stream; don't perturb training RNG
+    probe_boards, probe_labels, _probe_memo = [], [], {}
+    while sum(probe_labels) < 20 or (len(probe_labels) - sum(probe_labels)) < 20:
+        d = int(probe_rng.integers(6, 28))
+        b, _ = generate_solvable_board(env.mask, env.move_table, d, probe_rng)
+        for _ in range(int(probe_rng.integers(0, 6))):   # perturb some into dead territory
+            la = legal_actions(b, env.move_table)
+            if not la:
+                break
+            b = apply_move(b, env.move_table[int(probe_rng.choice(la))])
+        probe_boards.append(b.copy())
+        probe_labels.append(bool(is_solvable(b, env.move_table, _probe_memo)))
+    probe_X = featurize_batch(probe_boards, env.mask)
+    probe_labels = np.array(probe_labels)
+    best_gap = -1.0
+
     wins = 0
     for ep in range(episodes):
         frac = ep / max(episodes - 1, 1)
         epsilon = linear_schedule(eps_start, eps_end, frac / eps_anneal_frac)
-        depth = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
+        # older version
+        # depth = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
+        ceil  = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
+        depth = int(rng.integers(2, ceil + 1))   # uniform [2, ceil]: endgame retained, mid-game still covered
 
         won = collect_episode(env, model, buffer, rng, depth, epsilon)
         wins += int(won)
@@ -188,6 +209,14 @@ def train(
             msg += f" | win-rate {wins / log_every:.2f}"
             if loss is not None:
                 msg += f" | loss {loss:.4f}"
+            pv  = _v(model, probe_X)
+            gap = float(pv[probe_labels].mean() - pv[~probe_labels].mean())
+            msg += f" | Vsolv {pv[probe_labels].mean():.2f} Vdead {pv[~probe_labels].mean():.2f} gap {gap:+.2f}"
+            if gap > best_gap:
+                best_gap = gap
+                model.save_weights("peg_seed0_best.weights.h5")
+            if ep > 0 and ep % 2000 == 0:
+                model.save_weights("peg_seed0_ckpt.weights.h5")
             print(msg)
             wins = 0
 
@@ -217,10 +246,24 @@ def evaluate_solve(env, model):
 
 # ---- used for small tests -------------------
 if __name__ == "__main__":
-    """train(episodes=300, depth_start=2, depth_end=4, depth_anneal_frac=1.0,
-          target_sync=10, log_every=50)"""
+    """model = train(
+        episodes=12000,
+        gamma=1.0,
+        lr=1e-3,
+        buffer_capacity=50_000,
+        batch_size=128,
+        updates_per_episode=12,
+        target_sync=20,
+        eps_start=1.0, eps_end=0.15, eps_anneal_frac=0.65,
+        depth_start=2, depth_end=31, depth_anneal_frac=0.5,
+        max_steps=200,
+        seed=0,
+        log_every=100,
+    )
+    model.save_weights("peg_seed0_final.weights.h5")
+    print("done. best-by-gap -> peg_seed0_best.weights.h5 ; final -> peg_seed0_final.weights.h5")"""
     
-    model = train(episodes=5000)
-    model.save_weights("peg_seed0.weights.h5")   # <-- add this, right after train returns
+    model = build_value_network()
+    model.load_weights("peg_seed0_best.weights.h5")   
     env = PegSolitaireEnv()
     print(evaluate_solve(env, model))
