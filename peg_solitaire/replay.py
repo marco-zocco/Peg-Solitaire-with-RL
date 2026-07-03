@@ -3,6 +3,7 @@ Uniform experience replay over visited BOARDS (+ a terminal flag).
 """
 
 import numpy as np
+import os
 
 
 class ReplayBuffer:
@@ -25,3 +26,18 @@ class ReplayBuffer:
 
     def __len__(self):
         return self._size
+    
+
+    def save(self, path):
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            np.savez_compressed(f, boards=self.boards, terminal=self.terminal,
+                                ptr=self._ptr, size=self._size)
+        os.replace(tmp, path)
+
+    def load(self, path):
+        d = np.load(path)
+        self.boards = d["boards"]
+        self.terminal = d["terminal"]
+        self._ptr = int(d["ptr"])
+        self._size = int(d["size"])

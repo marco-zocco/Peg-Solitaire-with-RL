@@ -10,6 +10,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from keras.optimizers import Adam
+import os
 
 from .env import PegSolitaireEnv
 from .board import ENGLISH_MASK, featurize
@@ -107,64 +108,66 @@ def td_update(model, optimizer, sampled_bords, targets):
 def random_rollout(board, move_table, buffer, rng, max_steps):
     """Fork from a branch point: play uniformly random to termination,
     storing every visited board. No model calls -> cheap CPU-wise."""
+    n = 0
     for _ in range(max_steps):
         term = is_terminal(board, move_table)
         buffer.add(board, term)
+        n += 1
         if term:
-            return
+            break
         legal = legal_actions(board, move_table)
         a = legal[rng.integers(len(legal))]
         board = apply_move(board, move_table[a])
-
+    return n
 
 
 def collect_episode(model, mask, move_table, buffer, rng, depth, epsilon,
-                    max_steps, branch_prob=0.2):
+                    max_steps, branch_prob=0.0):
     board, _ = generate_solvable_board(mask, move_table, depth, rng)
     won = False
+    main_adds = 0
+    branch_adds = 0
     for _ in range(max_steps):
         term = is_terminal(board, move_table)
-        buffer.add(board, term)     
+        buffer.add(board, term)
+        main_adds += 1
         if term:
             won = is_win(board)
             break
-        if rng.random() < branch_prob:
-            random_rollout(board, move_table, buffer, rng, max_steps)
+        if branch_prob > 0.0 and rng.random() < branch_prob:
+            branch_adds += random_rollout(board, move_table, buffer, rng, max_steps)
         legal = legal_actions(board, move_table)
         a = select_action(board, model, mask, move_table, legal, epsilon, rng)
         board = apply_move(board, move_table[a])
-    return won                            # main-trajectory wins only
+    return won, main_adds, branch_adds
 
-
-
-'''def collect_episode(env, model, buffer, rng, depth, epsilon):
-    """Curricolum generated start -> forward play till it can't/win -> return if was won"""
-
-    start, _ = generate_solvable_board(env.mask, env.move_table, depth, rng)
-    _, action_mask = env.reset(options={"start_board": start})
-
-    start_term = is_terminal(env.board, env.move_table)
-    buffer.add(env.board.copy(), start_term)
-    if start_term:
-        return is_win(env.board)
-
-    won = False
-    while True:
-        legal = np.flatnonzero(action_mask["action_mask"])
-        a = select_action(env.board, model, env.mask, env.move_table, legal, epsilon, rng)
-        _, reward, terminated, truncated, action_mask = env.step(a)
-        buffer.add(env.board.copy(), terminated)
-        if terminated or truncated:
-            won = (reward == 1.0)
-            break
-        
-    return won'''
 
 
 # ---- schedules --------------------------------------------------------------
 def linear_schedule(start, end, frac):
     
     return start + (end - start) * min(max(frac, 0.0), 1.0)
+
+# ----- helpers ---------------------------------------------------------------
+def _save_weights_atomic(net, path):
+    tmp = path.replace(".weights.h5", ".tmp.weights.h5")
+    net.save_weights(tmp)
+    os.replace(tmp, path)
+
+
+def _save_optimizer(optimizer, path):
+    arrs = [np.asarray(v) for v in optimizer.variables]
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        np.savez_compressed(f, *arrs)
+    os.replace(tmp, path)
+
+
+def _load_optimizer(optimizer, model, path):
+    optimizer.build(model.trainable_variables)
+    d = np.load(path)
+    for v, k in zip(optimizer.variables, d.files):
+        v.assign(d[k])
 
 
 # ---- training loop ----------------------------------------------------------
@@ -177,11 +180,14 @@ def train(
     batch_size=64,
     updates_per_episode=4,
     target_sync=20,            # episodes between hard syncs
-    eps_start=1.0, eps_end=0.05, eps_anneal_frac= 0.8,     # 0.5,
+    eps_start=1.0, eps_end=0.05, eps_anneal_frac=0.8,
     depth_start=2, depth_end=31, depth_anneal_frac=0.8,
     max_steps=200,
     seed=0,
     log_every=100,
+    branch_prob=0.0,           # 0.0 -> baseline arm, >0 -> branched arm
+    outdir=None,               # checkpoints/weights dir; enables auto-resume
+    checkpoint_every=200,
 ):
     rng = np.random.default_rng(seed)
     tf.random.set_seed(seed)
@@ -213,17 +219,40 @@ def train(
     probe_labels = np.array(probe_labels)
     best_gap = -1.0
 
+    # --- resume ---------------------------------------------------------
+    start_ep = 0
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+        spath = os.path.join(outdir, "state.json")
+        if os.path.exists(spath):
+            with open(spath) as f:
+                st = json.load(f)
+            start_ep = st["episode"] + 1
+            best_gap = st["best_gap"]
+            if start_ep >= episodes:
+                print(f"[resume] {outdir} already complete, nothing to do", flush=True)
+                model.load_weights(os.path.join(outdir, "final.weights.h5"))
+                return model
+            model.load_weights(os.path.join(outdir, "ckpt_model.weights.h5"))
+            target.load_weights(os.path.join(outdir, "ckpt_target.weights.h5"))
+            _load_optimizer(optimizer, model, os.path.join(outdir, "ckpt_optim.npz"))
+            buffer.load(os.path.join(outdir, "ckpt_buffer.npz"))
+            rng = np.random.default_rng(seed + 100_000 * start_ep)
+            print(f"[resume] episode {start_ep} | buffer {len(buffer)} | best_gap {best_gap:+.2f}", flush=True)
+
     wins = 0
-    for ep in range(episodes):
+    main_adds = branch_adds = 0
+    for ep in range(start_ep, episodes):
         frac = ep / max(episodes - 1, 1)
         epsilon = linear_schedule(eps_start, eps_end, frac / eps_anneal_frac)
-        # older version
-        # depth = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
         ceil  = int(round(linear_schedule(depth_start, depth_end, frac / depth_anneal_frac)))
         depth = int(rng.integers(2, ceil + 1))   # uniform [2, ceil]: endgame retained, mid-game still covered
 
-        won = collect_episode(env, model, buffer, rng, depth, epsilon)
+        won, m, b = collect_episode(model, mask, move_table, buffer, rng,
+                                    depth, epsilon, max_steps, branch_prob)
         wins += int(won)
+        main_adds += m
+        branch_adds += b
 
         loss = None
         if len(buffer) >= batch_size:
@@ -236,9 +265,21 @@ def train(
         if ep % target_sync == 0:
             target.set_weights(model.get_weights())
 
+        if outdir and ep > 0 and ep % checkpoint_every == 0:
+            _save_weights_atomic(model, os.path.join(outdir, "ckpt_model.weights.h5"))
+            _save_weights_atomic(target, os.path.join(outdir, "ckpt_target.weights.h5"))
+            _save_optimizer(optimizer, os.path.join(outdir, "ckpt_optim.npz"))
+            buffer.save(os.path.join(outdir, "ckpt_buffer.npz"))
+            tmp = os.path.join(outdir, "state.json.tmp")
+            with open(tmp, "w") as f:
+                json.dump({"episode": ep, "best_gap": best_gap}, f)
+            os.replace(tmp, os.path.join(outdir, "state.json"))
+
         if log_every and ep % log_every == 0:
             msg = f"ep {ep:5d} | depth {depth:2d} | eps {epsilon:.2f} | buffer {len(buffer):6d}"
             msg += f" | win-rate {wins / log_every:.2f}"
+            tot = main_adds + branch_adds
+            msg += f" | branch-frac {branch_adds / max(tot, 1):.2f}"
             if loss is not None:
                 msg += f" | loss {loss:.4f}"
             pv  = _v(model, probe_X)
@@ -246,14 +287,19 @@ def train(
             msg += f" | Vsolv {pv[probe_labels].mean():.2f} Vdead {pv[~probe_labels].mean():.2f} gap {gap:+.2f}"
             if gap > best_gap:
                 best_gap = gap
-                model.save_weights("peg_seed0_best.weights.h5")
-            if ep > 0 and ep % 2000 == 0:
-                model.save_weights("peg_seed0_ckpt.weights.h5")
-            print(msg)
+                if outdir:
+                    _save_weights_atomic(model, os.path.join(outdir, "best.weights.h5"))
+            print(msg, flush=True)
             wins = 0
+            main_adds = branch_adds = 0
 
+    if outdir:
+        _save_weights_atomic(model, os.path.join(outdir, "final.weights.h5"))
+        tmp = os.path.join(outdir, "state.json.tmp")
+        with open(tmp, "w") as f:
+            json.dump({"episode": episodes - 1, "best_gap": best_gap}, f)
+        os.replace(tmp, os.path.join(outdir, "state.json"))
     return model
-    
 
 # ---- evaluation hook ----------------------------------
 def feasibility_scores(boards, model, mask):
@@ -278,8 +324,17 @@ def evaluate_solve(env, model):
 
 # ---- used for small tests -------------------
 if __name__ == "__main__":
-    """model = train(
-        episodes=12000,
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--episodes", type=int, default=12000)
+    p.add_argument("--branch-prob", type=float, default=0.0)
+    p.add_argument("--outdir", required=True)
+    p.add_argument("--checkpoint-every", type=int, default=200)
+    a = p.parse_args()
+
+    train(
+        episodes=a.episodes,
         gamma=1.0,
         lr=1e-3,
         buffer_capacity=50_000,
@@ -289,13 +344,10 @@ if __name__ == "__main__":
         eps_start=1.0, eps_end=0.15, eps_anneal_frac=0.65,
         depth_start=2, depth_end=31, depth_anneal_frac=0.5,
         max_steps=200,
-        seed=0,
+        seed=a.seed,
         log_every=100,
+        branch_prob=a.branch_prob,
+        outdir=a.outdir,
+        checkpoint_every=a.checkpoint_every,
     )
-model.save_weights("peg_seed0_final.weights.h5")
-    print("done. best-by-gap -> peg_seed0_best.weights.h5 ; final -> peg_seed0_final.weights.h5")"""
-    
-    model = build_value_network()
-    model.load_weights("peg_seed0_best.weights.h5")   
-    env = PegSolitaireEnv()
-    print(evaluate_solve(env, model))
+    print("done ->", a.outdir, flush=True)
