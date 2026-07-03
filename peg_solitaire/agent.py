@@ -11,6 +11,7 @@ import tensorflow as tf
 from tensorflow import keras
 from keras.optimizers import Adam
 import os
+import json
 
 from .env import PegSolitaireEnv
 from .board import ENGLISH_MASK, featurize
