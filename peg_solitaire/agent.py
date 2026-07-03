@@ -1,5 +1,4 @@
 """
-Fitted-VI / TD agent: V + one-step lookahead, target network, uniform replay.
 
 Target: y(s) = max over legal a of [ r + gamma * V_target(s') ]
   * Target network: V_target is a frozen copy used only to compute y; the live net
@@ -105,7 +104,40 @@ def td_update(model, optimizer, sampled_bords, targets):
 
 
 # ---- collection -------------------------------------------------------------
-def collect_episode(env, model, buffer, rng, depth, epsilon):
+def random_rollout(board, move_table, buffer, rng, max_steps):
+    """Fork from a branch point: play uniformly random to termination,
+    storing every visited board. No model calls -> cheap CPU-wise."""
+    for _ in range(max_steps):
+        term = is_terminal(board, move_table)
+        buffer.add(board, term)
+        if term:
+            return
+        legal = legal_actions(board, move_table)
+        a = legal[rng.integers(len(legal))]
+        board = apply_move(board, move_table[a])
+
+
+
+def collect_episode(model, mask, move_table, buffer, rng, depth, epsilon,
+                    max_steps, branch_prob=0.2):
+    board, _ = generate_solvable_board(mask, move_table, depth, rng)
+    won = False
+    for _ in range(max_steps):
+        term = is_terminal(board, move_table)
+        buffer.add(board, term)     
+        if term:
+            won = is_win(board)
+            break
+        if rng.random() < branch_prob:
+            random_rollout(board, move_table, buffer, rng, max_steps)
+        legal = legal_actions(board, move_table)
+        a = select_action(board, model, mask, move_table, legal, epsilon, rng)
+        board = apply_move(board, move_table[a])
+    return won                            # main-trajectory wins only
+
+
+
+'''def collect_episode(env, model, buffer, rng, depth, epsilon):
     """Curricolum generated start -> forward play till it can't/win -> return if was won"""
 
     start, _ = generate_solvable_board(env.mask, env.move_table, depth, rng)
@@ -126,7 +158,7 @@ def collect_episode(env, model, buffer, rng, depth, epsilon):
             won = (reward == 1.0)
             break
         
-    return won
+    return won'''
 
 
 # ---- schedules --------------------------------------------------------------
@@ -260,7 +292,7 @@ if __name__ == "__main__":
         seed=0,
         log_every=100,
     )
-    model.save_weights("peg_seed0_final.weights.h5")
+model.save_weights("peg_seed0_final.weights.h5")
     print("done. best-by-gap -> peg_seed0_best.weights.h5 ; final -> peg_seed0_final.weights.h5")"""
     
     model = build_value_network()
